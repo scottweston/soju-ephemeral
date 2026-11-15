@@ -1,5 +1,8 @@
 # [soju]
 
+> Personal fork of soju with ephemeral sessions, immediate hibernation, and
+> message-history purging.
+
 soju is a user-friendly IRC bouncer. soju connects to upstream IRC servers on
 behalf of the user to provide extra functionality. soju supports many features
 such as multiple users, numerous [IRCv3] extensions, chat history playback and
