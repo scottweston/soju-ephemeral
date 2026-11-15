@@ -95,6 +95,10 @@ type BasicServer struct {
 	MessageExpiry             time.Duration
 	EnableUsersOnAuth         bool
 	ClientCertAuth            bool
+	EphemeralMode             bool
+	EphemeralQuitMsg          string
+	EphemeralGrace            time.Duration
+	EphemeralHistory          time.Duration
 }
 
 type Server struct {
@@ -121,8 +125,10 @@ func Defaults() *Server {
 			MsgStore: MsgStore{
 				Driver: msgstore.DriverDB,
 			},
-			HTTPIngress:     "https://" + hostname,
-			MaxUserNetworks: -1,
+			HTTPIngress:      "https://" + hostname,
+			MaxUserNetworks:  -1,
+			EphemeralGrace:   defaultEphemeralGrace,
+			EphemeralHistory: defaultEphemeralHistory,
 		},
 		DB: DB{
 			Driver: database.DriverSQLite3,
@@ -161,6 +167,10 @@ func Load(filename string) (*Server, error) {
 		MessageExpiry       string   `scfg:"message-expiry"`
 		EnableUserOnAuth    string   `scfg:"enable-user-on-auth"`
 		ClientCertAuth      string   `scfg:"client-cert-auth"`
+		EphemeralMode       string   `scfg:"ephemeral-mode"`
+		EphemeralQuitMsg    string   `scfg:"ephemeral-quit-msg"`
+		EphemeralGrace      string   `scfg:"ephemeral-grace"`
+		EphemeralHistory    string   `scfg:"ephemeral-history"`
 	}
 
 	raw.MaxUserNetworks = -1
@@ -208,7 +218,7 @@ func Load(filename string) (*Server, error) {
 			return nil, err
 		}
 		switch msgstore.Driver(driver) {
-		case msgstore.DriverMemory, msgstore.DriverDB:
+		case msgstore.DriverMemory, msgstore.DriverDB, msgstore.DriverEphemeral:
 			if source != "" {
 				return nil, fmt.Errorf("directive message-store: driver %q requires zero parameters", driver)
 			}
@@ -339,6 +349,9 @@ func Load(filename string) (*Server, error) {
 			return nil, fmt.Errorf("directive client-cert-auth: %v", err)
 		}
 		srv.ClientCertAuth = b
+	}
+	if err := applyEphemeralConfig(srv, raw.EphemeralMode, raw.EphemeralQuitMsg, raw.EphemeralGrace, raw.EphemeralHistory); err != nil {
+		return nil, err
 	}
 
 	return srv, nil

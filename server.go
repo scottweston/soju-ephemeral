@@ -249,6 +249,12 @@ func (s *Server) Start() error {
 		s.messageExpiryLoop()
 	}()
 
+	s.stopWG.Add(1)
+	go func() {
+		defer s.stopWG.Done()
+		s.ephemeralHistoryLoop()
+	}()
+
 	return nil
 }
 
@@ -748,6 +754,9 @@ func (s *Server) messageExpiryLoop() {
 }
 
 func (s *Server) disableInactiveUsers(ctx context.Context) error {
+	if s.Config().EphemeralMode {
+		return nil
+	}
 	delay := s.Config().DisableInactiveUsersDelay
 	if delay == 0 {
 		return nil
@@ -816,6 +825,9 @@ func (s *Server) disableInactiveUsers(ctx context.Context) error {
 }
 
 func (s *Server) deleteExpiredMessages(ctx context.Context) error {
+	if s.Config().EphemeralMode {
+		return nil
+	}
 	messageExpiry := s.Config().MessageExpiry
 	if messageExpiry == 0 {
 		return nil
@@ -827,7 +839,7 @@ func (s *Server) deleteExpiredMessages(ctx context.Context) error {
 	before := time.Now().Add(-messageExpiry)
 
 	switch s.Config().MsgStore.Driver {
-	case msgstore.DriverDB:
+	case msgstore.DriverDB, msgstore.DriverEphemeral:
 		if err := s.db.DeleteMessagesBefore(ctx, before); err != nil {
 			return fmt.Errorf("failed to delete expired messages from db: %w", err)
 		}

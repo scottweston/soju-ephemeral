@@ -148,9 +148,11 @@ func (ds deliveredStore) ForEachClient(f func(clientName string)) {
 
 type network struct {
 	database.Network
-	user    *user
-	logger  Logger
-	stopped chan struct{}
+	user             *user
+	logger           Logger
+	stopped          chan struct{}
+	started          atomic.Bool
+	ephemeralStopped atomic.Bool
 
 	conn      *upstreamConn
 	channels  xirc.CaseMappingMap[*database.Channel]
@@ -327,7 +329,7 @@ func (net *network) run() {
 	var lastTry time.Time
 	backoff := newBackoffer(retryConnectMinDelay, retryConnectMaxDelay, retryConnectJitter)
 	for {
-		if net.isStopped() {
+		if net.isStopped() || net.ephemeralStopped.Load() {
 			return
 		}
 
@@ -588,6 +590,7 @@ type user struct {
 	networks        []*network
 	downstreamConns []*downstreamConn
 	msgStore        msgstore.Store
+	ephemeral       ephemeralUserState
 }
 
 func newUser(srv *Server, record *database.User) *user {
@@ -599,6 +602,8 @@ func newUser(srv *Server, record *database.User) *user {
 		msgStore = msgstore.NewFSStore(srv.Config().MsgStore.Source, record)
 	case msgstore.DriverDB:
 		msgStore = msgstore.NewDBStore(srv.db)
+	case msgstore.DriverEphemeral:
+		msgStore = msgstore.NewEphemeralStore(srv.db)
 	case msgstore.DriverMemory:
 		msgStore = msgstore.NewMemoryStore()
 	}
@@ -692,7 +697,7 @@ func (u *user) run() {
 			}
 		}
 
-		go network.run()
+		u.startNetwork(network)
 	}
 
 	for e := range u.events {
@@ -782,7 +787,7 @@ func (u *user) run() {
 				dc.monitored.SetCaseMapping(dc.network.casemap)
 			}
 
-			if !u.Enabled && u.srv.Config().EnableUsersOnAuth {
+			if !u.Enabled && (u.srv.Config().EnableUsersOnAuth || u.srv.Config().EphemeralMode) {
 				err := u.updateUser(ctx, func(record *database.User) error {
 					record.Enabled = true
 					return nil
@@ -831,6 +836,7 @@ func (u *user) run() {
 			if !dc.impersonating {
 				u.bumpDownstreamInteractionTime(ctx)
 			}
+			u.ephemeralOnDownstreamConnected(ctx)
 		case eventDownstreamDisconnected:
 			dc := e.dc
 
@@ -855,8 +861,14 @@ func (u *user) run() {
 			if !dc.impersonating {
 				u.bumpDownstreamInteractionTime(ctx)
 			}
+			u.ephemeralOnDownstreamDisconnected(ctx)
 		case eventDownstreamMessage:
 			msg, dc := e.msg, e.dc
+			// Clients can close their connection as soon as they send QUIT.
+			// Honor an explicit hibernation request even if it closed while queued.
+			if msg.Command == "QUIT" && dc.handleEphemeralQuit(ctx, msg) {
+				break
+			}
 			if dc.isClosed() {
 				dc.logger.Printf("ignoring message on closed connection: %v", msg)
 				break
@@ -921,7 +933,10 @@ func (u *user) run() {
 			case <-ctx.Done():
 			case e.ch <- userRunMsg{err: err}:
 			}
+		case eventEphemeralHibernate:
+			u.handleEphemeralHibernateEvent(e)
 		case eventStop:
+			u.ephemeral.stopTimer()
 			for _, dc := range u.downstreamConns {
 				dc.Close()
 			}
@@ -1007,7 +1022,7 @@ func (u *user) addNetwork(network *network) {
 		return u.networks[i].ID < u.networks[j].ID
 	})
 
-	go network.run()
+	u.startNetwork(network)
 }
 
 func (u *user) removeNetwork(network *network) {

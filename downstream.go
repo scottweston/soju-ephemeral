@@ -438,7 +438,7 @@ func newDownstreamConn(srv *Server, ic ircConn, id uint64) *downstreamConn {
 	// authentication and then check that user.msgStore implements
 	// chatHistoryMessageStore
 	switch srvConfig.MsgStore.Driver {
-	case msgstore.DriverFS, msgstore.DriverDB:
+	case msgstore.DriverFS, msgstore.DriverDB, msgstore.DriverEphemeral:
 		dc.caps.Available["draft/chathistory"] = ""
 		dc.caps.Available["soju.im/search"] = ""
 	}
